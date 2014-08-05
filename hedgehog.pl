@@ -28,7 +28,7 @@
     my $DEBUG       = 0;
     my $random      = 1;
     my $corner_home = 0;
-    my $no_mono     = 1;
+    my $no_mono     = 0;
 
     my $field_txt = <<'EOF';
 AAAAAAAAAA
@@ -85,11 +85,11 @@ EOF
             $display = Text_Display->new();
         }
 
-        my ($hx,$hy) = $field->get_hedgie();
-        my ($ox,$oy) = $field->get_home();
+        my ($hx,$hy) = $field->get_piece('hedgehog');
+        my ($ox,$oy) = $field->get_piece('home');
 
-        my $hedgie = Hedgehog->new(token => $tokens{hedgehog});
-        my $home = Home->new(token => $tokens{home});
+        my $hedgie = Hedgehog->new();
+        my $home = Home->new();
 
         if ( defined $hx and !$random ) {
             $hedgie->set_position($hx,$hy);
@@ -105,24 +105,15 @@ EOF
 
         ($hx,$hy) = $field->place($hedgie);
         ($ox,$oy) = $field->place($home);
+        $hedgie->set_home($ox,$oy);
 
+        my $limit = 20;
         my $step=1;
-        while($hx != $ox or
-              $hy != $oy) {
-            if ( $hx > $ox ) {
-                $hx--;
-            }
-            elsif ( $hx < $ox ) {
-                $hx++;
-            }
-            if ( $hy > $oy ) {
-                $hy--;
-            }
-            elsif ( $hy < $oy ) {
-                $hy++;
-            }
-            $field->place($hx,$hy,'move');
+        while(($hx,$hy) = $hedgie->move()) {
+            $field->place($hx,$hy,$step);
+            die "too many moves" if ( $step++ > $limit );
         }
+
         $field->place($home);
         $display->draw($field->get_pmap(),\%display_map);
     }
@@ -307,7 +298,7 @@ EOF
         use Data::Dumper;
         use Hash::Util qw(lock_keys);
 
-        my @keys = qw( x y token );
+        my @keys = qw( x y );
 
         sub new {
             my ($class,@args) = @_;
@@ -328,14 +319,56 @@ EOF
             my ( $self ) = @_;
             return ( $self->{x}, $self->{y} );
         }
-        sub get_token {
-            return shift->{token};
-        }
     }
 
     package Hedgehog
     {
         use base 'Piece';
+        use Hash::Util qw(lock_keys);
+
+        my @keys = qw( x y home_x home_y );
+
+        sub new {
+            my ($class,@args) = @_;
+
+            my $self = {@args};
+            bless $self, $class;
+            lock_keys( %$self, @keys );
+
+            return $self;
+        }
+
+        sub set_home {
+            my ( $self, $x, $y ) = @_;
+            $self->{home_x} = $x;
+            $self->{home_y} = $y;
+        }
+
+        sub move {
+            my ( $self ) = @_;
+            my ( $ox, $oy ) = ($self->{home_x}, $self->{home_y});
+            my ( $hx, $hy ) = ($self->{x}, $self->{y});
+
+            return if ($hx == $ox and $hy == $oy);
+
+            if ( $hx > $ox ) {
+                $hx--;
+            }
+            elsif ( $hx < $ox ) {
+                $hx++;
+            }
+            if ( $hy > $oy ) {
+                $hy--;
+            }
+            elsif ( $hy < $oy ) {
+                $hy++;
+            }
+
+            $self->{x} = $hx;
+            $self->{y} = $hy;
+
+            return ( $hx, $hy );
+    }
     }
 
     package Home
@@ -354,10 +387,7 @@ EOF
             input_map
             token_map
             pmap
-            hxx
-            hyy
-            oxx
-            oyy
+            piece_locations
             parsed_flag
             DEBUG
         );
@@ -413,14 +443,7 @@ EOF
                 my $l=length;
                 for(my $i=0;$i<$l;$i++){
                     my $c=substr($_,$i,1);
-                    if($token_map->{$c} eq 'hedgehog') {
-                        $self->{hxx}=$i;
-                        $self->{hyy}=$cl;
-                    }
-                    elsif($token_map->{$c} eq 'home') {
-                        $self->{oxx}=$i;
-                        $self->{oyy}=$cl;
-                    }
+                    push @{$self->{piece_locations}->{$token_map->{$c}}}, [$i,$cl];
                     push @{$pmap[$cl]}, $token_map->{$c} || $default_token;
                 }
                 $cl++;
@@ -428,15 +451,11 @@ EOF
             $self->{parsed_flag}=1;
             return;
         }
-        sub get_hedgie {
-            my ($self) = @_;
+        sub get_piece {
+            my ($self,$piece) = @_;
             $self->parse();
-            return ($self->{hxx},$self->{hyy});
-        }
-        sub get_home {
-            my ($self) = @_;
-            $self->parse();
-            return ($self->{oxx},$self->{oyy});
+            my ($x,$y) = @{$self->{piece_locations}->{$piece}->[0]};
+            return ($x,$y);
         }
     }
 
