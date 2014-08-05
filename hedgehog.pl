@@ -21,13 +21,14 @@
 
 # ------------------ MAIN -----------------------------------------------------
     # TODO
-    # MVC - model, view, controller - separate
+    # 3 representations: input map, storage, display
     #
 
     # CONFIG
-    my $DEBUG=0;
-    my $random=1;
-    my $corner_home=0;
+    my $DEBUG       = 0;
+    my $random      = 1;
+    my $corner_home = 0;
+    my $no_mono     = 1;
 
     my $field_txt = <<'EOF';
 AAAAAAAAAA
@@ -42,13 +43,19 @@ AAAAAAAAAA
 AAAAAAAAAC
 EOF
 
-    my %token = (
-        space => 'A',
-        move  => 'X',
-        hog   => 'B',
-        home  => 'C',
-    );
-    my %tmap = reverse %token;
+
+    my @pieces_a         = ( 'hedgehog', 'home', 'space', 'move', );
+    my @map_tokens_a     = ( 'B',        'C',    'A',     'X',    );
+    my @display_tokens_a = ( 'H',        'O',    ' ',     'X',    );
+
+    my %tokens;
+    @tokens{@pieces_a} =  @map_tokens_a;
+
+    my %token_map;
+    @token_map{@map_tokens_a} =  @pieces_a;
+
+    my %display_map;
+    @display_map{@pieces_a} = @display_tokens_a;
 
     my @keys = qw( );
 
@@ -65,17 +72,24 @@ EOF
 
         my $field = Field->new(
             input_map => $field_txt,
-            token     => \%token,
+            token_map => \%token_map,
             DEBUG     => $DEBUG,
         );
 
-        my $display = Text_Display->new();
+        my $display;
+
+        if ( $no_mono ) {
+            $display = No_Mono_Display->new();
+        }
+        else {
+            $display = Text_Display->new();
+        }
 
         my ($hx,$hy) = $field->get_hedgie();
         my ($ox,$oy) = $field->get_home();
 
-        my $hedgie = Hedgehog->new(token => $token{hog});
-        my $home = Home->new(token => $token{home});
+        my $hedgie = Hedgehog->new(token => $tokens{hedgehog});
+        my $home = Home->new(token => $tokens{home});
 
         if ( defined $hx and !$random ) {
             $hedgie->set_position($hx,$hy);
@@ -87,7 +101,7 @@ EOF
             $home->set_position(9,9) if $corner_home;
         }
 
-        $field->init();
+        $field->init('space');
 
         ($hx,$hy) = $field->place($hedgie);
         ($ox,$oy) = $field->place($home);
@@ -107,10 +121,10 @@ EOF
             elsif ( $hy < $oy ) {
                 $hy++;
             }
-            $field->place($hx,$hy,$token{move});
+            $field->place($hx,$hy,'move');
         }
         $field->place($home);
-        $display->draw($field,\%tmap);
+        $display->draw($field->get_pmap(),\%display_map);
     }
 
     sub coord {
@@ -231,13 +245,6 @@ EOF
         use Data::Dumper;
         use Hash::Util qw(lock_keys);
 
-        my %display_tokens = (
-            space => 'Y',
-            move  => 'X',
-            hog   => 'H',
-            home  => 'O',
-        );
-
         my @keys = qw( );
 
         sub new {
@@ -251,14 +258,46 @@ EOF
         }
 
         sub draw {
-            my ( $self, $field, $token_map ) = @_;
-            my $pmap=$field->get_pmap();
-            for my $i (@$pmap) {
+            my ( $self, $map, $translation ) = @_;
+
+            for my $i (@$map) {
                 for my $j (@$i) {
-                    print $display_tokens{$token_map->{$j}};
+                    print $translation->{$j};
                 }
                 print "\n";
             }
+        }
+    }
+
+    package No_Mono_Display
+    {
+        use Carp;
+        use Data::Dumper;
+
+        use base 'Text_Display';
+        my @equiv = qw( a b d e g h n o p q u );
+        @equiv = qw( V T S P N K H F E B A U );
+
+        sub draw {
+            my ( $self, $map, $translation ) = @_;
+
+            my $equiv_idx = 0;
+            my %xlat;
+
+            for my $i (@$map) {
+                for my $j (@$i) {
+                    if ( !$xlat{$j} ) {
+                        $xlat{$j} = $equiv[$equiv_idx++];
+                    }
+                    print $xlat{$j};
+                }
+                print "\n";
+            }
+            print "Legend: ";
+            for ( sort { $a cmp $b } keys %xlat ) {
+                print "$_=$xlat{$_}  ";
+            }
+            print "\n";
         }
     }
 
@@ -313,7 +352,7 @@ EOF
         my $DEBUG = 0;
         my @keys = qw(
             input_map
-            token
+            token_map
             pmap
             hxx
             hyy
@@ -322,6 +361,7 @@ EOF
             parsed_flag
             DEBUG
         );
+        my $default_token = '';
 
         sub new {
             my ($class,@args) = @_;
@@ -338,24 +378,24 @@ EOF
             return shift->{pmap};
         }
         sub init {
-            my ($self) = @_;
-            my $space = $self->{token}->{space};
+            my ($self,$token) = @_;
+            $token //= $default_token;
             my @pmap;
             for my $y (0..9) {
                 for my $x (0..9) {
-                    push @{$pmap[$y]}, $space;
+                    push @{$pmap[$y]}, $token;
                 }
             }
             $self->{pmap} = \@pmap;
         }
         sub place {
-            my ($self,$x,$y,$token) = @_;
+            my ($self,$x,$y,$label) = @_;
             if ( ref $x ) {
                 my $piece = $x;
                 ($x,$y) = $piece->get_position();
-                $token = $piece->get_token();
+                $label = lc(ref $piece);
             }
-            $self->{pmap}->[$y]->[$x]=$token;
+            $self->{pmap}->[$y]->[$x]=$label;
             return ($x,$y);
         }
         sub parse {
@@ -363,36 +403,28 @@ EOF
 
             return if $self->{parsed_flag};
 
-            my $token = $self->{token};
+            my $token_map = $self->{token_map};
 
             my @lines = split "\n", $self->{input_map};
+            my @pmap;
             my $cl=0;
             for (@lines) {
                 next unless $_;
                 my $l=length;
                 for(my $i=0;$i<$l;$i++){
                     my $c=substr($_,$i,1);
-                    if($c eq $token->{space}){
-                        dprint(" , ");
-                    }
-                    elsif($c eq $token->{hog}) {
-                        dprint(" ; ");
+                    if($token_map->{$c} eq 'hedgehog') {
                         $self->{hxx}=$i;
                         $self->{hyy}=$cl;
                     }
-                    elsif($c eq $token->{home}) {
+                    elsif($token_map->{$c} eq 'home') {
                         $self->{oxx}=$i;
                         $self->{oyy}=$cl;
-                        dprint(" ! ");
                     }
-                    else {
-                        dprint("???");
-                    }
+                    push @{$pmap[$cl]}, $token_map->{$c} || $default_token;
                 }
-                dprint("\n");
                 $cl++;
             }
-            dexit();
             $self->{parsed_flag}=1;
             return;
         }
@@ -405,12 +437,6 @@ EOF
             my ($self) = @_;
             $self->parse();
             return ($self->{oxx},$self->{oyy});
-        }
-        sub dprint {
-            print @_ if $DEBUG;
-        }
-        sub dexit {
-            exit if $DEBUG;
         }
     }
 
